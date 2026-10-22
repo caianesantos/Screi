@@ -25,8 +25,14 @@ public class ResponsavelController {
     @GetMapping("/novo") public String novo(Model model) { model.addAttribute("form",new SolicitacaoMatriculaFormDto()); return "wizard"; }
     @PostMapping("/solicitacoes") public String enviar(@Valid @ModelAttribute("form") SolicitacaoMatriculaFormDto form, BindingResult result, RedirectAttributes flash) {
         if (result.hasErrors()) return "wizard";
-        var s=solicitacoes.enviar(form); flash.addFlashAttribute("sucesso","Solicitação enviada. Guarde seu protocolo: "+s.getProtocolo());
-        return "redirect:/responsavel/status?consulta="+s.getProtocolo();
+        try {
+            var s=solicitacoes.enviar(form);
+            flash.addFlashAttribute("sucesso","Solicitação enviada. Guarde seu protocolo: "+s.getProtocolo());
+            return "redirect:/responsavel/status?consulta="+s.getProtocolo();
+        } catch (AlunoJaCadastradoException ex) {
+            result.rejectValue("aluno.cpf", "aluno.cpf.duplicado", ex.getMessage());
+            return "wizard";
+        }
     }
     @GetMapping("/status") public String status(@RequestParam(defaultValue="") String consulta, Model model) {
         model.addAttribute("consulta",consulta); model.addAttribute("solicitacoes",solicitacoes.consultar(consulta)); return "status";
