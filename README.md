@@ -21,6 +21,7 @@ Abra [http://localhost:8080](http://localhost:8080). O Bootstrap usa CDN; o wiza
 ## Acesso e uso
 
 - Responsáveis: cadastro público em `/responsavel/novo`, com três etapas e validação de todos os campos no servidor.
+- O CPF do aluno é normalizado e único: a aplicação verifica a existência antes de salvar e o banco bloqueia duplicidade inclusive em envios simultâneos. O alerta mantém os dados preenchidos no formulário. O CPF do responsável pode se repetir para cadastrar irmãos ou outros alunos sob sua responsabilidade.
 - Acompanhamento público em `/responsavel/status`, por protocolo ou CPF do responsável, com ou sem pontuação. A consulta apresenta apenas protocolo, situação, datas e justificativa de pendência.
 - Secretaria: entre em `/login` com `secretaria@escola.com` e `admin123`.
 - A fila em `/secretaria/triagem` permite abrir todos os dados, atualizar a situação e exportar somente os aprovados.
@@ -54,4 +55,8 @@ java -jar target/screi-1.0.0.jar
 
 A suíte integra banco H2, MVC, Security, Thymeleaf e leitura do XLSX, verificando cadastro, consulta, autenticação, autorização, CSRF, workflow e rejeição de justificativas ausentes ou vazias.
 
+Também verifica CPFs de aluno repetidos com e sem pontuação, responsáveis compartilhados por vários alunos, alerta no formulário, restrição no banco e submissões concorrentes.
+
 O arquivo `CODIGO_COMPLETO.md` apresenta o conteúdo integral dos arquivos da aplicação e dos testes, em blocos Markdown identificados por caminho.
+
+O estudo [Viabilidade da coleta de documentos](docs/VIABILIDADE_DOCUMENTOS.md) descreve os novos passos propostos, armazenamento seguro, limites, esforço e exemplos de custos. Os uploads ainda não estão implementados.
