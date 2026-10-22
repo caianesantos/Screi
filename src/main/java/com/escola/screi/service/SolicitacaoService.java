@@ -4,6 +4,8 @@ import com.escola.screi.dto.*;
 import com.escola.screi.model.*;
 import com.escola.screi.model.enums.StatusMatricula;
 import com.escola.screi.repository.SolicitacaoMatriculaRepository;
+import com.escola.screi.repository.AlunoRepository;
+import org.springframework.dao.DataIntegrityViolationException;
 import jakarta.validation.Valid;
 import org.springframework.stereotype.Service;
 import org.springframework.validation.annotation.Validated;
@@ -14,16 +16,33 @@ import java.util.List;
 @Service @Validated
 public class SolicitacaoService {
     private final SolicitacaoMatriculaRepository repository;
-    public SolicitacaoService(SolicitacaoMatriculaRepository repository) { this.repository=repository; }
+    private final AlunoRepository alunos;
+    public SolicitacaoService(SolicitacaoMatriculaRepository repository, AlunoRepository alunos) {
+        this.repository=repository; this.alunos=alunos;
+    }
     @Transactional
     public SolicitacaoMatricula enviar(@Valid SolicitacaoMatriculaFormDto form) {
+        String cpfAluno=form.getAluno().getCpf().replaceAll("\\D", "");
+        if (alunos.existsByCpf(cpfAluno)) throw new AlunoJaCadastradoException();
         SolicitacaoMatricula s=new SolicitacaoMatricula();
         form.getAluno().setId(null); form.getResponsavel().setId(null); form.getContatoEmergencia().setId(null);
-        form.getAluno().setCpf(form.getAluno().getCpf().replaceAll("\\D", ""));
+        form.getAluno().setCpf(cpfAluno);
         form.getResponsavel().setCpf(form.getResponsavel().getCpf().replaceAll("\\D", ""));
         s.setAluno(form.getAluno()); s.getResponsaveis().add(form.getResponsavel());
         s.getContatosEmergencia().add(form.getContatoEmergencia()); s.setStatus(StatusMatricula.ENVIADO);
-        return repository.save(s);
+        try {
+            return repository.saveAndFlush(s);
+        } catch (DataIntegrityViolationException ex) {
+            // The unique constraint also protects simultaneous submissions.
+            for (Throwable causa=ex; causa!=null; causa=causa.getCause()) {
+                if (causa instanceof org.hibernate.exception.ConstraintViolationException violacao &&
+                    violacao.getConstraintName()!=null &&
+                    violacao.getConstraintName().toLowerCase(java.util.Locale.ROOT).contains("uk_aluno_cpf")) {
+                    throw new AlunoJaCadastradoException();
+                }
+            }
+            throw ex;
+        }
     }
     @Transactional(readOnly=true)
     public List<SolicitacaoMatricula> consultar(String consulta) {

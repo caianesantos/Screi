@@ -132,8 +132,14 @@ public class ResponsavelController {
     @GetMapping("/novo") public String novo(Model model) { model.addAttribute("form",new SolicitacaoMatriculaFormDto()); return "wizard"; }
     @PostMapping("/solicitacoes") public String enviar(@Valid @ModelAttribute("form") SolicitacaoMatriculaFormDto form, BindingResult result, RedirectAttributes flash) {
         if (result.hasErrors()) return "wizard";
-        var s=solicitacoes.enviar(form); flash.addFlashAttribute("sucesso","Solicitação enviada. Guarde seu protocolo: "+s.getProtocolo());
-        return "redirect:/responsavel/status?consulta="+s.getProtocolo();
+        try {
+            var s=solicitacoes.enviar(form);
+            flash.addFlashAttribute("sucesso","Solicitação enviada. Guarde seu protocolo: "+s.getProtocolo());
+            return "redirect:/responsavel/status?consulta="+s.getProtocolo();
+        } catch (AlunoJaCadastradoException ex) {
+            result.rejectValue("aluno.cpf", "aluno.cpf.duplicado", ex.getMessage());
+            return "wizard";
+        }
     }
     @GetMapping("/status") public String status(@RequestParam(defaultValue="") String consulta, Model model) {
         model.addAttribute("consulta",consulta); model.addAttribute("solicitacoes",solicitacoes.consultar(consulta)); return "status";
@@ -251,6 +257,7 @@ import jakarta.persistence.*;
 import jakarta.validation.constraints.*;
 import org.hibernate.validator.constraints.br.CPF;
 @Entity
+@Table(uniqueConstraints = @UniqueConstraint(name="uk_aluno_cpf", columnNames="cpf"))
 public class Aluno {
     @Id @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
@@ -262,6 +269,7 @@ public class Aluno {
     @NotBlank @Size(max=100)
     private String certidaoNascimento;
     @NotBlank @CPF
+    @Column(nullable=false, length=11)
     private String cpf;
     @NotBlank @Size(max=2000) @Column(length=2000)
     private String autorizadosBuscar;
@@ -278,6 +286,10 @@ public class Aluno {
     public String getAutorizadosBuscar() { return autorizadosBuscar; }
     public void setAutorizadosBuscar(String autorizadosBuscar) { this.autorizadosBuscar = autorizadosBuscar; }
 
+    @PrePersist @PreUpdate
+    void normalizarCpf() {
+        if (cpf != null) cpf = cpf.replaceAll("[.\\s-]", "");
+    }
 }
 ```
 
@@ -491,6 +503,19 @@ public class Usuario {
 }
 ```
 
+## `src/main/java/com/escola/screi/repository/AlunoRepository.java`
+
+```java
+package com.escola.screi.repository;
+
+import com.escola.screi.model.Aluno;
+import org.springframework.data.jpa.repository.JpaRepository;
+
+public interface AlunoRepository extends JpaRepository<Aluno, Long> {
+    boolean existsByCpf(String cpf);
+}
+```
+
 ## `src/main/java/com/escola/screi/repository/SolicitacaoMatriculaRepository.java`
 
 ```java
@@ -531,6 +556,18 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
 @SpringBootApplication
 public class ScreiApplication {
     public static void main(String[] args) { SpringApplication.run(ScreiApplication.class, args); }
+}
+```
+
+## `src/main/java/com/escola/screi/service/AlunoJaCadastradoException.java`
+
+```java
+package com.escola.screi.service;
+
+public class AlunoJaCadastradoException extends IllegalArgumentException {
+    public AlunoJaCadastradoException() {
+        super("Já existe um aluno cadastrado com este CPF. Consulte a solicitação existente ou procure a secretaria.");
+    }
 }
 ```
 
@@ -612,6 +649,8 @@ import com.escola.screi.dto.*;
 import com.escola.screi.model.*;
 import com.escola.screi.model.enums.StatusMatricula;
 import com.escola.screi.repository.SolicitacaoMatriculaRepository;
+import com.escola.screi.repository.AlunoRepository;
+import org.springframework.dao.DataIntegrityViolationException;
 import jakarta.validation.Valid;
 import org.springframework.stereotype.Service;
 import org.springframework.validation.annotation.Validated;
@@ -622,16 +661,33 @@ import java.util.List;
 @Service @Validated
 public class SolicitacaoService {
     private final SolicitacaoMatriculaRepository repository;
-    public SolicitacaoService(SolicitacaoMatriculaRepository repository) { this.repository=repository; }
+    private final AlunoRepository alunos;
+    public SolicitacaoService(SolicitacaoMatriculaRepository repository, AlunoRepository alunos) {
+        this.repository=repository; this.alunos=alunos;
+    }
     @Transactional
     public SolicitacaoMatricula enviar(@Valid SolicitacaoMatriculaFormDto form) {
+        String cpfAluno=form.getAluno().getCpf().replaceAll("\\D", "");
+        if (alunos.existsByCpf(cpfAluno)) throw new AlunoJaCadastradoException();
         SolicitacaoMatricula s=new SolicitacaoMatricula();
         form.getAluno().setId(null); form.getResponsavel().setId(null); form.getContatoEmergencia().setId(null);
-        form.getAluno().setCpf(form.getAluno().getCpf().replaceAll("\\D", ""));
+        form.getAluno().setCpf(cpfAluno);
         form.getResponsavel().setCpf(form.getResponsavel().getCpf().replaceAll("\\D", ""));
         s.setAluno(form.getAluno()); s.getResponsaveis().add(form.getResponsavel());
         s.getContatosEmergencia().add(form.getContatoEmergencia()); s.setStatus(StatusMatricula.ENVIADO);
-        return repository.save(s);
+        try {
+            return repository.saveAndFlush(s);
+        } catch (DataIntegrityViolationException ex) {
+            // The unique constraint also protects simultaneous submissions.
+            for (Throwable causa=ex; causa!=null; causa=causa.getCause()) {
+                if (causa instanceof org.hibernate.exception.ConstraintViolationException violacao &&
+                    violacao.getConstraintName()!=null &&
+                    violacao.getConstraintName().toLowerCase(java.util.Locale.ROOT).contains("uk_aluno_cpf")) {
+                    throw new AlunoJaCadastradoException();
+                }
+            }
+            throw ex;
+        }
     }
     @Transactional(readOnly=true)
     public List<SolicitacaoMatricula> consultar(String consulta) {
@@ -875,6 +931,7 @@ import com.escola.screi.repository.*;
 import com.escola.screi.service.*;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.NullAndEmptySource;
 import org.junit.jupiter.params.provider.ValueSource;
@@ -899,6 +956,12 @@ class ScreiApplicationTests {
     @Autowired UsuarioRepository usuarios;
     @Autowired ExcelExportService excel;
     @Autowired BCryptPasswordEncoder encoder;
+    @Autowired AlunoRepository alunos;
+
+    @BeforeEach void limparSolicitacoes() {
+        repository.deleteAll();
+        alunos.deleteAll();
+    }
 
     private SolicitacaoMatriculaFormDto formulario() {
         var form = new SolicitacaoMatriculaFormDto();
@@ -940,7 +1003,9 @@ class ScreiApplicationTests {
 
     @Test void workflowEExportacaoSomenteAprovados() throws Exception {
         var aprovado=service.enviar(formulario());
-        var pendente=service.enviar(formulario());
+        var segundoFormulario=formulario();
+        segundoFormulario.getAluno().setCpf("111.444.777-35");
+        var pendente=service.enviar(segundoFormulario);
         var dto=new StatusUpdateDto(); dto.setStatus(StatusMatricula.EM_ANALISE); service.atualizarStatus(aprovado.getId(),dto);
         dto.setStatus(StatusMatricula.APROVADO); service.atualizarStatus(aprovado.getId(),dto);
         dto.setStatus(StatusMatricula.COM_PENDENCIA); dto.setJustificativaReprovacao(" Apresentar certidão legível. ");
@@ -983,7 +1048,17 @@ class ScreiApplicationTests {
     }
 
     @Test void submissaoHttpValidaDataCpfECamposPermitidos() throws Exception {
-        mvc.perform(post("/responsavel/solicitacoes").with(csrf())
+        mvc.perform(submissaoValida())
+            .andExpect(status().is3xxRedirection())
+            .andExpect(redirectedUrlPattern("/responsavel/status?consulta=*"));
+        var s=service.consultar("11144477735").stream()
+            .filter(item -> item.getAluno().getNomeCompleto().equals("Aluno do formulário")).findFirst().orElseThrow();
+        assertThat(s.getAluno().getId()).isNotEqualTo(99999L);
+        assertThat(s.getAluno().getDataNascimento()).isEqualTo(LocalDate.of(2023,1,15));
+    }
+
+    private org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder submissaoValida() {
+        return post("/responsavel/solicitacoes").with(csrf())
             .param("aluno.nomeCompleto","Aluno do formulário").param("aluno.dataNascimento","2023-01-15")
             .param("aluno.certidaoNascimento","123456").param("aluno.cpf","529.982.247-25")
             .param("aluno.autorizadosBuscar","Maria").param("aluno.id","99999")
@@ -993,13 +1068,68 @@ class ScreiApplicationTests {
             .param("responsavel.logradouro","Rua Teste").param("responsavel.numero","10")
             .param("responsavel.bairro","Centro").param("responsavel.cidade","Salvador").param("responsavel.estado","BA")
             .param("contatoEmergencia.nome","João").param("contatoEmergencia.parentesco","Tio")
-            .param("contatoEmergencia.telefone","71988888888"))
-            .andExpect(status().is3xxRedirection())
-            .andExpect(redirectedUrlPattern("/responsavel/status?consulta=*"));
-        var s=service.consultar("11144477735").stream()
-            .filter(item -> item.getAluno().getNomeCompleto().equals("Aluno do formulário")).findFirst().orElseThrow();
-        assertThat(s.getAluno().getId()).isNotEqualTo(99999L);
-        assertThat(s.getAluno().getDataNascimento()).isEqualTo(LocalDate.of(2023,1,15));
+            .param("contatoEmergencia.telefone","71988888888");
+    }
+
+    @ParameterizedTest @ValueSource(strings={"529.982.247-25", "52998224725"})
+    void rejeitaCpfDeAlunoRepetidoMesmoComOutroResponsavel(String cpf) {
+        service.enviar(formulario());
+        var duplicado=formulario();
+        duplicado.getAluno().setCpf(cpf);
+        duplicado.getResponsavel().setCpf("52998224725");
+        assertThatThrownBy(() -> service.enviar(duplicado)).isInstanceOf(AlunoJaCadastradoException.class);
+        assertThat(repository.count()).isEqualTo(1);
+        assertThat(alunos.count()).isEqualTo(1);
+    }
+
+    @Test void permiteIrmaosComMesmoResponsavel() {
+        var primeiro=service.enviar(formulario());
+        var segundoForm=formulario();
+        segundoForm.getAluno().setCpf("11144477735");
+        var segundo=service.enviar(segundoForm);
+        assertThat(repository.count()).isEqualTo(2);
+        assertThat(service.consultar("11144477735")).extracting("id").containsExactlyInAnyOrder(primeiro.getId(),segundo.getId());
+    }
+
+    @Test void bancoImpedeDuplicidadeMesmoSemPassarPeloServico() {
+        service.enviar(formulario());
+        var duplicado=formulario().getAluno();
+        assertThatThrownBy(() -> alunos.saveAndFlush(duplicado))
+            .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
+        assertThat(alunos.count()).isEqualTo(1);
+    }
+
+    @Test void formularioExibeErroNoCpfEPreservaDados() throws Exception {
+        service.enviar(formulario());
+        mvc.perform(submissaoValida()).andExpect(status().isOk()).andExpect(view().name("wizard"))
+            .andExpect(model().attributeHasFieldErrorCode("form","aluno.cpf","aluno.cpf.duplicado"))
+            .andExpect(content().string(org.hamcrest.Matchers.containsString("Já existe um aluno cadastrado com este CPF")))
+            .andExpect(result -> assertThat(org.unbescape.html.HtmlEscape.unescapeHtml(
+                result.getResponse().getContentAsString(java.nio.charset.StandardCharsets.UTF_8)))
+                .contains("value=\"Aluno do formulário\""));
+        assertThat(repository.count()).isEqualTo(1);
+    }
+
+    @Test void enviosSimultaneosGeramUmaUnicaSolicitacao() throws Exception {
+        var executor=java.util.concurrent.Executors.newFixedThreadPool(2);
+        var pronto=new java.util.concurrent.CountDownLatch(2);
+        var iniciar=new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.Callable<Boolean> enviar=() -> {
+            var form=formulario();
+            pronto.countDown();
+            if (!iniciar.await(10,java.util.concurrent.TimeUnit.SECONDS)) throw new IllegalStateException("Timeout");
+            try { service.enviar(form); return true; }
+            catch (AlunoJaCadastradoException ex) { return false; }
+        };
+        try {
+            var primeiro=executor.submit(enviar); var segundo=executor.submit(enviar);
+            assertThat(pronto.await(10,java.util.concurrent.TimeUnit.SECONDS)).isTrue();
+            iniciar.countDown();
+            assertThat(java.util.List.of(primeiro.get(20,java.util.concurrent.TimeUnit.SECONDS),
+                segundo.get(20,java.util.concurrent.TimeUnit.SECONDS))).containsExactlyInAnyOrder(true,false);
+            assertThat(repository.count()).isEqualTo(1);
+            assertThat(alunos.count()).isEqualTo(1);
+        } finally { iniciar.countDown(); executor.shutdownNow(); }
     }
 }
 ```

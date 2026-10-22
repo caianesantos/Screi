@@ -6,6 +6,7 @@ import com.escola.screi.repository.*;
 import com.escola.screi.service.*;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.NullAndEmptySource;
 import org.junit.jupiter.params.provider.ValueSource;
@@ -30,6 +31,12 @@ class ScreiApplicationTests {
     @Autowired UsuarioRepository usuarios;
     @Autowired ExcelExportService excel;
     @Autowired BCryptPasswordEncoder encoder;
+    @Autowired AlunoRepository alunos;
+
+    @BeforeEach void limparSolicitacoes() {
+        repository.deleteAll();
+        alunos.deleteAll();
+    }
 
     private SolicitacaoMatriculaFormDto formulario() {
         var form = new SolicitacaoMatriculaFormDto();
@@ -71,7 +78,9 @@ class ScreiApplicationTests {
 
     @Test void workflowEExportacaoSomenteAprovados() throws Exception {
         var aprovado=service.enviar(formulario());
-        var pendente=service.enviar(formulario());
+        var segundoFormulario=formulario();
+        segundoFormulario.getAluno().setCpf("111.444.777-35");
+        var pendente=service.enviar(segundoFormulario);
         var dto=new StatusUpdateDto(); dto.setStatus(StatusMatricula.EM_ANALISE); service.atualizarStatus(aprovado.getId(),dto);
         dto.setStatus(StatusMatricula.APROVADO); service.atualizarStatus(aprovado.getId(),dto);
         dto.setStatus(StatusMatricula.COM_PENDENCIA); dto.setJustificativaReprovacao(" Apresentar certidão legível. ");
@@ -114,7 +123,17 @@ class ScreiApplicationTests {
     }
 
     @Test void submissaoHttpValidaDataCpfECamposPermitidos() throws Exception {
-        mvc.perform(post("/responsavel/solicitacoes").with(csrf())
+        mvc.perform(submissaoValida())
+            .andExpect(status().is3xxRedirection())
+            .andExpect(redirectedUrlPattern("/responsavel/status?consulta=*"));
+        var s=service.consultar("11144477735").stream()
+            .filter(item -> item.getAluno().getNomeCompleto().equals("Aluno do formulário")).findFirst().orElseThrow();
+        assertThat(s.getAluno().getId()).isNotEqualTo(99999L);
+        assertThat(s.getAluno().getDataNascimento()).isEqualTo(LocalDate.of(2023,1,15));
+    }
+
+    private org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder submissaoValida() {
+        return post("/responsavel/solicitacoes").with(csrf())
             .param("aluno.nomeCompleto","Aluno do formulário").param("aluno.dataNascimento","2023-01-15")
             .param("aluno.certidaoNascimento","123456").param("aluno.cpf","529.982.247-25")
             .param("aluno.autorizadosBuscar","Maria").param("aluno.id","99999")
@@ -124,12 +143,67 @@ class ScreiApplicationTests {
             .param("responsavel.logradouro","Rua Teste").param("responsavel.numero","10")
             .param("responsavel.bairro","Centro").param("responsavel.cidade","Salvador").param("responsavel.estado","BA")
             .param("contatoEmergencia.nome","João").param("contatoEmergencia.parentesco","Tio")
-            .param("contatoEmergencia.telefone","71988888888"))
-            .andExpect(status().is3xxRedirection())
-            .andExpect(redirectedUrlPattern("/responsavel/status?consulta=*"));
-        var s=service.consultar("11144477735").stream()
-            .filter(item -> item.getAluno().getNomeCompleto().equals("Aluno do formulário")).findFirst().orElseThrow();
-        assertThat(s.getAluno().getId()).isNotEqualTo(99999L);
-        assertThat(s.getAluno().getDataNascimento()).isEqualTo(LocalDate.of(2023,1,15));
+            .param("contatoEmergencia.telefone","71988888888");
+    }
+
+    @ParameterizedTest @ValueSource(strings={"529.982.247-25", "52998224725"})
+    void rejeitaCpfDeAlunoRepetidoMesmoComOutroResponsavel(String cpf) {
+        service.enviar(formulario());
+        var duplicado=formulario();
+        duplicado.getAluno().setCpf(cpf);
+        duplicado.getResponsavel().setCpf("52998224725");
+        assertThatThrownBy(() -> service.enviar(duplicado)).isInstanceOf(AlunoJaCadastradoException.class);
+        assertThat(repository.count()).isEqualTo(1);
+        assertThat(alunos.count()).isEqualTo(1);
+    }
+
+    @Test void permiteIrmaosComMesmoResponsavel() {
+        var primeiro=service.enviar(formulario());
+        var segundoForm=formulario();
+        segundoForm.getAluno().setCpf("11144477735");
+        var segundo=service.enviar(segundoForm);
+        assertThat(repository.count()).isEqualTo(2);
+        assertThat(service.consultar("11144477735")).extracting("id").containsExactlyInAnyOrder(primeiro.getId(),segundo.getId());
+    }
+
+    @Test void bancoImpedeDuplicidadeMesmoSemPassarPeloServico() {
+        service.enviar(formulario());
+        var duplicado=formulario().getAluno();
+        assertThatThrownBy(() -> alunos.saveAndFlush(duplicado))
+            .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
+        assertThat(alunos.count()).isEqualTo(1);
+    }
+
+    @Test void formularioExibeErroNoCpfEPreservaDados() throws Exception {
+        service.enviar(formulario());
+        mvc.perform(submissaoValida()).andExpect(status().isOk()).andExpect(view().name("wizard"))
+            .andExpect(model().attributeHasFieldErrorCode("form","aluno.cpf","aluno.cpf.duplicado"))
+            .andExpect(content().string(org.hamcrest.Matchers.containsString("Já existe um aluno cadastrado com este CPF")))
+            .andExpect(result -> assertThat(org.unbescape.html.HtmlEscape.unescapeHtml(
+                result.getResponse().getContentAsString(java.nio.charset.StandardCharsets.UTF_8)))
+                .contains("value=\"Aluno do formulário\""));
+        assertThat(repository.count()).isEqualTo(1);
+    }
+
+    @Test void enviosSimultaneosGeramUmaUnicaSolicitacao() throws Exception {
+        var executor=java.util.concurrent.Executors.newFixedThreadPool(2);
+        var pronto=new java.util.concurrent.CountDownLatch(2);
+        var iniciar=new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.Callable<Boolean> enviar=() -> {
+            var form=formulario();
+            pronto.countDown();
+            if (!iniciar.await(10,java.util.concurrent.TimeUnit.SECONDS)) throw new IllegalStateException("Timeout");
+            try { service.enviar(form); return true; }
+            catch (AlunoJaCadastradoException ex) { return false; }
+        };
+        try {
+            var primeiro=executor.submit(enviar); var segundo=executor.submit(enviar);
+            assertThat(pronto.await(10,java.util.concurrent.TimeUnit.SECONDS)).isTrue();
+            iniciar.countDown();
+            assertThat(java.util.List.of(primeiro.get(20,java.util.concurrent.TimeUnit.SECONDS),
+                segundo.get(20,java.util.concurrent.TimeUnit.SECONDS))).containsExactlyInAnyOrder(true,false);
+            assertThat(repository.count()).isEqualTo(1);
+            assertThat(alunos.count()).isEqualTo(1);
+        } finally { iniciar.countDown(); executor.shutdownNow(); }
     }
 }

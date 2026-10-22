@@ -4,6 +4,7 @@ import jakarta.persistence.*;
 import jakarta.validation.constraints.*;
 import org.hibernate.validator.constraints.br.CPF;
 @Entity
+@Table(uniqueConstraints = @UniqueConstraint(name="uk_aluno_cpf", columnNames="cpf"))
 public class Aluno {
     @Id @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
@@ -15,6 +16,7 @@ public class Aluno {
     @NotBlank @Size(max=100)
     private String certidaoNascimento;
     @NotBlank @CPF
+    @Column(nullable=false, length=11)
     private String cpf;
     @NotBlank @Size(max=2000) @Column(length=2000)
     private String autorizadosBuscar;
@@ -31,4 +33,8 @@ public class Aluno {
     public String getAutorizadosBuscar() { return autorizadosBuscar; }
     public void setAutorizadosBuscar(String autorizadosBuscar) { this.autorizadosBuscar = autorizadosBuscar; }
 
+    @PrePersist @PreUpdate
+    void normalizarCpf() {
+        if (cpf != null) cpf = cpf.replaceAll("[.\\s-]", "");
+    }
 }
