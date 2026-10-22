@@ -1,0 +1,15 @@
+:root { --bs-primary: #175b83; --bs-primary-rgb: 23,91,131; }
+body { background: #f3f6fa; color: #25364a; }
+main { min-height: 75vh; max-width: 1100px; }
+.card { border: 1px solid #dce4ed; border-radius: 14px; box-shadow: 0 5px 22px #20364e08; }
+.btn-primary { background: #175b83; border-color: #175b83; }
+.navbar-brand small { font-size: .75rem; margin-left: .5rem; }
+.login-card { max-width: 460px; }
+.steps { display: flex; flex-wrap: wrap; gap: 1rem; padding: 0; list-style: none; margin: 2rem 0; }
+.steps li { padding: .7rem 1rem; background: #e3ebf4; border-radius: 8px; }
+.steps li.active { background: #175b83; color: white; }
+fieldset[hidden] { display: none !important; }
+legend { float: none; width: auto; }
+th { white-space: nowrap; }
+td, th { padding: 1rem !important; vertical-align: middle; }
+@media(max-width: 576px) { .navbar .container { gap: 1rem; } h1 { font-size: 1.8rem; } }
