@@ -18,6 +18,8 @@ public class SolicitacaoMatricula {
     private List<Responsavel> responsaveis = new ArrayList<>();
     @OneToMany(cascade=CascadeType.ALL, orphanRemoval=true) @JoinColumn(name="solicitacao_id")
     private List<ContatoEmergencia> contatosEmergencia = new ArrayList<>();
+    @OneToMany(mappedBy="solicitacao", cascade=CascadeType.ALL, orphanRemoval=true)
+    private List<DocumentoMatricula> documentos = new ArrayList<>();
     @Enumerated(EnumType.STRING) @Column(nullable=false)
     private StatusMatricula status = StatusMatricula.ENVIADO;
     @Column(length=2000)
@@ -36,6 +38,7 @@ public class SolicitacaoMatricula {
     public void setResponsaveis(List<Responsavel> responsaveis) { this.responsaveis = responsaveis; }
     public List<ContatoEmergencia> getContatosEmergencia() { return contatosEmergencia; }
     public void setContatosEmergencia(List<ContatoEmergencia> contatosEmergencia) { this.contatosEmergencia = contatosEmergencia; }
+    public List<DocumentoMatricula> getDocumentos() { return documentos; }
     public StatusMatricula getStatus() { return status; }
     public void setStatus(StatusMatricula status) { this.status = status; }
     public String getJustificativaReprovacao() { return justificativaReprovacao; }

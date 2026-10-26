@@ -17,19 +17,23 @@ import java.util.List;
 public class SolicitacaoService {
     private final SolicitacaoMatriculaRepository repository;
     private final AlunoRepository alunos;
-    public SolicitacaoService(SolicitacaoMatriculaRepository repository, AlunoRepository alunos) {
-        this.repository=repository; this.alunos=alunos;
+    private final DocumentoService documentos;
+    public SolicitacaoService(SolicitacaoMatriculaRepository repository, AlunoRepository alunos, DocumentoService documentos) {
+        this.repository=repository; this.alunos=alunos; this.documentos=documentos;
     }
     @Transactional
     public SolicitacaoMatricula enviar(@Valid SolicitacaoMatriculaFormDto form) {
         String cpfAluno=form.getAluno().getCpf().replaceAll("\\D", "");
         if (alunos.existsByCpf(cpfAluno)) throw new AlunoJaCadastradoException();
+        var imagens=documentos.validar(form);
         SolicitacaoMatricula s=new SolicitacaoMatricula();
+        s.setProtocolo(java.util.UUID.randomUUID().toString());
         form.getAluno().setId(null); form.getResponsavel().setId(null); form.getContatoEmergencia().setId(null);
         form.getAluno().setCpf(cpfAluno);
         form.getResponsavel().setCpf(form.getResponsavel().getCpf().replaceAll("\\D", ""));
         s.setAluno(form.getAluno()); s.getResponsaveis().add(form.getResponsavel());
         s.getContatosEmergencia().add(form.getContatoEmergencia()); s.setStatus(StatusMatricula.ENVIADO);
+        documentos.anexar(s,imagens);
         try {
             return repository.saveAndFlush(s);
         } catch (DataIntegrityViolationException ex) {
@@ -58,7 +62,7 @@ public class SolicitacaoService {
     public List<SolicitacaoMatricula> listar() { return repository.findAllByOrderByDataSubmissaoDesc(); }
     @Transactional(readOnly=true)
     public SolicitacaoMatricula detalhar(Long id) {
-        var s=buscar(id); s.getResponsaveis().size(); s.getContatosEmergencia().size(); return s;
+        var s=buscar(id); s.getResponsaveis().size(); s.getContatosEmergencia().size(); s.getDocumentos().size(); return s;
     }
     private SolicitacaoMatricula buscar(Long id) {
         return repository.findById(id).orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND,"Solicitação não encontrada"));

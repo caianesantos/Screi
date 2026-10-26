@@ -20,7 +20,8 @@ public class ResponsavelController {
         binder.setAllowedFields("aluno.nomeCompleto","aluno.dataNascimento","aluno.certidaoNascimento","aluno.cpf","aluno.autorizadosBuscar",
             "responsavel.nomeCompleto","responsavel.parentesco","responsavel.cpf","responsavel.telefone","responsavel.email","responsavel.cep",
             "responsavel.logradouro","responsavel.numero","responsavel.bairro","responsavel.cidade","responsavel.estado",
-            "contatoEmergencia.nome","contatoEmergencia.parentesco","contatoEmergencia.telefone");
+            "contatoEmergencia.nome","contatoEmergencia.parentesco","contatoEmergencia.telefone",
+            "cpfAlunoImagem","certidaoNascimentoImagem","cpfResponsavelImagem","comprovanteResidenciaImagem");
     }
     @GetMapping("/novo") public String novo(Model model) { model.addAttribute("form",new SolicitacaoMatriculaFormDto()); return "wizard"; }
     @PostMapping("/solicitacoes") public String enviar(@Valid @ModelAttribute("form") SolicitacaoMatriculaFormDto form, BindingResult result, RedirectAttributes flash) {
@@ -31,6 +32,12 @@ public class ResponsavelController {
             return "redirect:/responsavel/status?consulta="+s.getProtocolo();
         } catch (AlunoJaCadastradoException ex) {
             result.rejectValue("aluno.cpf", "aluno.cpf.duplicado", ex.getMessage());
+            return "wizard";
+        } catch (DocumentoInvalidoException ex) {
+            result.rejectValue(ex.getCampo(),"documento.invalido",ex.getMessage());
+            return "wizard";
+        } catch (ArmazenamentoIndisponivelException ex) {
+            result.reject("documentos.indisponiveis",ex.getMessage());
             return "wizard";
         }
     }

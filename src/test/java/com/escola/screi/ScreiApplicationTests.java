@@ -15,6 +15,9 @@ import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMock
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import static org.mockito.Mockito.*;
+import static org.mockito.ArgumentMatchers.*;
 import java.io.ByteArrayInputStream;
 import java.time.LocalDate;
 import static org.assertj.core.api.Assertions.*;
@@ -32,6 +35,7 @@ class ScreiApplicationTests {
     @Autowired ExcelExportService excel;
     @Autowired BCryptPasswordEncoder encoder;
     @Autowired AlunoRepository alunos;
+    @MockitoBean DocumentoStorage storage;
 
     @BeforeEach void limparSolicitacoes() {
         repository.deleteAll();
@@ -49,6 +53,7 @@ class ScreiApplicationTests {
         r.setLogradouro("Rua Teste"); r.setNumero("10"); r.setBairro("Centro"); r.setCidade("Salvador"); r.setEstado("BA");
         var c = form.getContatoEmergencia();
         c.setNome("João Teste"); c.setParentesco("Tio"); c.setTelefone("71988888888");
+        ImagensTeste.anexar(form);
         return form;
     }
 
@@ -133,7 +138,12 @@ class ScreiApplicationTests {
     }
 
     private org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder submissaoValida() {
-        return post("/responsavel/solicitacoes").with(csrf())
+        return submissao(true);
+    }
+    private org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder submissao(boolean comImagens) {
+        var request=multipart("/responsavel/solicitacoes");
+        if (comImagens) ImagensTeste.anexar(request);
+        return request.with(csrf())
             .param("aluno.nomeCompleto","Aluno do formulário").param("aluno.dataNascimento","2023-01-15")
             .param("aluno.certidaoNascimento","123456").param("aluno.cpf","529.982.247-25")
             .param("aluno.autorizadosBuscar","Maria").param("aluno.id","99999")
@@ -205,5 +215,51 @@ class ScreiApplicationTests {
             assertThat(repository.count()).isEqualTo(1);
             assertThat(alunos.count()).isEqualTo(1);
         } finally { iniciar.countDown(); executor.shutdownNow(); }
+    }
+
+    @Test void imagensSaoAssociadasEVisiveisSomentePelaSecretaria() throws Exception {
+        var s=service.enviar(formulario());
+        var documentos=service.detalhar(s.getId()).getDocumentos();
+        assertThat(documentos).hasSize(4);
+        verify(storage,times(4)).enviar(anyString(),any(byte[].class),eq("image/png"));
+        var documento=documentos.get(0);
+        when(storage.ler(documento.getChaveBlob())).thenReturn(ImagensTeste.bytes("png"));
+        String url="/secretaria/solicitacoes/"+s.getId()+"/documentos/"+documento.getId();
+        mvc.perform(get(url)).andExpect(status().is3xxRedirection());
+        mvc.perform(get(url).with(user("pai").roles("RESPONSAVEL"))).andExpect(status().isForbidden());
+        mvc.perform(get(url).with(user("secretaria").roles("SECRETARIA"))).andExpect(status().isOk())
+            .andExpect(content().contentType("image/png")).andExpect(header().string("Cache-Control","no-store"))
+            .andExpect(content().bytes(ImagensTeste.bytes("png")));
+        mvc.perform(get("/secretaria/solicitacoes/999999/documentos/"+documento.getId())
+            .with(user("secretaria").roles("SECRETARIA"))).andExpect(status().isNotFound());
+        mvc.perform(get("/secretaria/solicitacoes/"+s.getId()).with(user("secretaria").roles("SECRETARIA")))
+            .andExpect(status().isOk()).andExpect(content().string(org.hamcrest.Matchers.containsString("Documentos enviados")));
+    }
+
+    @Test void imagensObrigatoriasNaoPodemSerOmitidasNoBackend() throws Exception {
+        mvc.perform(submissao(false)).andExpect(status().isOk()).andExpect(view().name("wizard"))
+            .andExpect(model().attributeHasFieldErrorCode("form","cpfAlunoImagem","documento.invalido"));
+        assertThat(repository.count()).isZero();
+        verifyNoInteractions(storage);
+    }
+
+    @Test void falhaDeUploadDesfazCadastroERemoveArquivosParciais() {
+        var contador=new java.util.concurrent.atomic.AtomicInteger();
+        doAnswer(invocation -> {
+            if (contador.incrementAndGet()==2) throw new ArmazenamentoIndisponivelException(new IllegalStateException("Falha simulada"));
+            return null;
+        }).when(storage).enviar(anyString(),any(byte[].class),anyString());
+        assertThatThrownBy(() -> service.enviar(formulario())).isInstanceOf(ArmazenamentoIndisponivelException.class);
+        assertThat(repository.count()).isZero();
+        assertThat(alunos.count()).isZero();
+        verify(storage,times(2)).excluir(anyString());
+    }
+
+    @Test void falhaDeArmazenamentoMostraMensagemSemConcluirCadastro() throws Exception {
+        doThrow(new ArmazenamentoIndisponivelException(new IllegalStateException("Falha simulada")))
+            .when(storage).enviar(anyString(),any(byte[].class),anyString());
+        mvc.perform(submissaoValida()).andExpect(status().isOk()).andExpect(view().name("wizard"))
+            .andExpect(model().hasErrors()).andExpect(content().string(org.hamcrest.Matchers.containsString("temporariamente indisponível")));
+        assertThat(repository.count()).isZero();
     }
 }
