@@ -4,6 +4,39 @@ const steps = [...form.querySelectorAll('[data-step]')];
 const previous = document.getElementById('previous');
 const next = document.getElementById('next');
 const submit = document.getElementById('submit');
+document.querySelectorAll('.document-input').forEach(input => {
+  const preview = document.getElementById(input.id + '-preview');
+  const status = document.getElementById(input.id + '-status');
+  const remove = document.querySelector('[data-input="' + input.id + '"]');
+  let url;
+  function update() {
+    if (url) { URL.revokeObjectURL(url); url = null; }
+    preview.hidden = true;
+    preview.removeAttribute('src');
+    input.setCustomValidity('');
+    const file = input.files[0];
+    remove.hidden = !file;
+    status.textContent = 'Nenhuma imagem selecionada.';
+    if (!file) return;
+    if (!['image/jpeg', 'image/png'].includes(file.type) || !/\.(png|jpe?g)$/i.test(file.name)) {
+      input.setCustomValidity('Selecione uma imagem JPEG ou PNG.');
+    } else if (file.size > 5 * 1024 * 1024) {
+      input.setCustomValidity('A imagem deve ter no máximo 5 MiB.');
+    }
+    if (!input.validity.valid) { status.textContent = input.validationMessage; return; }
+    status.textContent = file.name + ' · ' + (file.size / 1024).toFixed(1) + ' KiB';
+    url = URL.createObjectURL(file);
+    preview.src = url;
+    preview.hidden = false;
+  }
+  input.addEventListener('change', update);
+  preview.addEventListener('error', () => {
+    input.setCustomValidity('Não foi possível visualizar a imagem. Selecione outra.');
+    status.textContent = input.validationMessage;
+    preview.hidden = true;
+  });
+  remove.addEventListener('click', () => { input.value = ''; update(); input.focus(); });
+});
 let current = 0;
 function showStep(index) {
   current = index;
