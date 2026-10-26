@@ -5,21 +5,20 @@ import com.escola.screi.model.*;
 import com.escola.screi.model.enums.StatusMatricula;
 import com.escola.screi.repository.SolicitacaoMatriculaRepository;
 import com.escola.screi.repository.AlunoRepository;
-import org.springframework.dao.DataIntegrityViolationException;
 import jakarta.validation.Valid;
 import org.springframework.stereotype.Service;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.web.server.ResponseStatusException;
-import org.springframework.http.HttpStatus;
 import java.util.List;
 @Service @Validated
 public class SolicitacaoService {
     private final SolicitacaoMatriculaRepository repository;
     private final AlunoRepository alunos;
     private final DocumentoService documentos;
-    public SolicitacaoService(SolicitacaoMatriculaRepository repository, AlunoRepository alunos, DocumentoService documentos) {
-        this.repository=repository; this.alunos=alunos; this.documentos=documentos;
+    private final RegistroSolicitacao registro;
+    public SolicitacaoService(SolicitacaoMatriculaRepository repository, AlunoRepository alunos, DocumentoService documentos,
+                             RegistroSolicitacao registro) {
+        this.repository=repository; this.alunos=alunos; this.documentos=documentos; this.registro=registro;
     }
     @Transactional
     public SolicitacaoMatricula enviar(@Valid SolicitacaoMatriculaFormDto form) {
@@ -34,19 +33,7 @@ public class SolicitacaoService {
         s.setAluno(form.getAluno()); s.getResponsaveis().add(form.getResponsavel());
         s.getContatosEmergencia().add(form.getContatoEmergencia()); s.setStatus(StatusMatricula.ENVIADO);
         documentos.anexar(s,imagens);
-        try {
-            return repository.saveAndFlush(s);
-        } catch (DataIntegrityViolationException ex) {
-            // The unique constraint also protects simultaneous submissions.
-            for (Throwable causa=ex; causa!=null; causa=causa.getCause()) {
-                if (causa instanceof org.hibernate.exception.ConstraintViolationException violacao &&
-                    violacao.getConstraintName()!=null &&
-                    violacao.getConstraintName().toLowerCase(java.util.Locale.ROOT).contains("uk_aluno_cpf")) {
-                    throw new AlunoJaCadastradoException();
-                }
-            }
-            throw ex;
-        }
+        return registro.salvar(s);
     }
     @Transactional(readOnly=true)
     public List<SolicitacaoMatricula> consultar(String consulta) {
@@ -65,7 +52,7 @@ public class SolicitacaoService {
         var s=buscar(id); s.getResponsaveis().size(); s.getContatosEmergencia().size(); s.getDocumentos().size(); return s;
     }
     private SolicitacaoMatricula buscar(Long id) {
-        return repository.findById(id).orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND,"Solicitação não encontrada"));
+        return repository.findById(id).orElseThrow(() -> new RecursoNaoEncontradoException("Solicitação não encontrada"));
     }
     @Transactional
     public void atualizarStatus(Long id, StatusUpdateDto dto) {

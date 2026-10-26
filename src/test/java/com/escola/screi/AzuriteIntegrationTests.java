@@ -36,7 +36,7 @@ class AzuriteIntegrationTests {
         String nome="screi-test-"+java.util.UUID.randomUUID();
         var client=new BlobServiceClientBuilder().connectionString(connection)
             .serviceVersion(BlobServiceVersion.V2023_11_03).buildClient().getBlobContainerClient(nome);
-        var storage=new AzureBlobDocumentoStorage(connection,nome);
+        var storage=new AzureBlobDocumentoStorage(client);
         try {
             byte[] imagem=ImagensTeste.bytes("png");
             storage.enviar("cadastro/imagem.png",imagem,"image/png");
@@ -45,6 +45,7 @@ class AzuriteIntegrationTests {
             assertThat(client.getBlobClient("cadastro/imagem.png").getProperties().getContentType()).isEqualTo("image/png");
             storage.excluir("cadastro/imagem.png");
             assertThat(client.getBlobClient("cadastro/imagem.png").exists()).isFalse();
+            ContratoDocumentoStorage.verificar(storage);
         } finally { client.deleteIfExists(); }
     }
 

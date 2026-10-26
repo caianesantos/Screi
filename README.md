@@ -2,6 +2,8 @@
 
 Sistema de Cadastro e Rematrícula da Educação Infantil em Java 17+, Spring Boot 3, Thymeleaf, Spring Security e H2.
 
+A aplicação dos princípios SOLID, os pontos de extensão e as estruturas de dados utilizadas estão descritos em [SOLID e estruturas de dados](docs/SOLID_E_ESTRUTURAS_DE_DADOS.md), com referências às classes e aos testes de contrato.
+
 ## Executar
 
 O ambiente de testes usa **Azurite**, emulador local do Azure Blob Storage. Não é preciso conta ou assinatura Azure. Os arquivos e o banco local ficam em volumes persistentes.
