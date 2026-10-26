@@ -4,21 +4,12 @@ import com.azure.core.util.BinaryData;
 import com.azure.storage.blob.*;
 import com.azure.storage.blob.models.BlobHttpHeaders;
 import com.azure.storage.blob.options.BlobParallelUploadOptions;
-import com.azure.storage.common.policy.RequestRetryOptions;
-import com.azure.storage.common.policy.RetryPolicyType;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 @Service
 public class AzureBlobDocumentoStorage implements DocumentoStorage {
     private final BlobContainerClient container;
-    public AzureBlobDocumentoStorage(@Value("${screi.storage.connection-string}") String connectionString,
-                                     @Value("${screi.storage.container}") String nomeContainer) {
-        container=new BlobServiceClientBuilder().connectionString(connectionString)
-            .serviceVersion(BlobServiceVersion.V2023_11_03)
-            .retryOptions(new RequestRetryOptions(RetryPolicyType.FIXED, 2, 10, 100L, 500L, null))
-            .buildClient().getBlobContainerClient(nomeContainer);
-    }
+    public AzureBlobDocumentoStorage(BlobContainerClient container) { this.container=container; }
     @Override public void enviar(String chave, byte[] imagem, String contentType) {
         try {
             // Without a public-access option the new container is private.

@@ -262,4 +262,10 @@ class ScreiApplicationTests {
             .andExpect(model().hasErrors()).andExpect(content().string(org.hamcrest.Matchers.containsString("temporariamente indisponível")));
         assertThat(repository.count()).isZero();
     }
+
+    @Test void ausenciaDeRecursoEConvertidaParaHttpSomenteNaCamadaWeb() throws Exception {
+        assertThatThrownBy(() -> service.detalhar(-1L)).isInstanceOf(RecursoNaoEncontradoException.class);
+        mvc.perform(get("/secretaria/solicitacoes/-1").with(user("secretaria").roles("SECRETARIA")))
+            .andExpect(status().isNotFound());
+    }
 }

@@ -1,29 +1,28 @@
 package com.escola.screi.service;
 
 import com.escola.screi.dto.SolicitacaoMatriculaFormDto;
+import com.escola.screi.dto.DocumentoValidado;
 import com.escola.screi.model.*;
 import com.escola.screi.model.enums.TipoDocumento;
 import com.escola.screi.repository.DocumentoMatriculaRepository;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.*;
-import org.springframework.web.server.ResponseStatusException;
-import org.springframework.http.HttpStatus;
 import org.slf4j.LoggerFactory;
 import java.util.*;
 
 @Service
 public class DocumentoService {
     private final DocumentoStorage storage;
-    private final ImagemDocumentoValidator validator;
+    private final ValidadorDocumento validator;
     private final DocumentoMatriculaRepository repository;
-    public DocumentoService(DocumentoStorage storage, ImagemDocumentoValidator validator, DocumentoMatriculaRepository repository) {
+    public DocumentoService(DocumentoStorage storage, ValidadorDocumento validator, DocumentoMatriculaRepository repository) {
         this.storage=storage; this.validator=validator; this.repository=repository;
     }
-    public List<ImagemDocumentoValidator.ImagemValidada> validar(SolicitacaoMatriculaFormDto form) {
+    public List<DocumentoValidado> validar(SolicitacaoMatriculaFormDto form) {
         return Arrays.stream(TipoDocumento.values()).map(tipo -> validator.validar(tipo,form.arquivo(tipo))).toList();
     }
-    public void anexar(SolicitacaoMatricula solicitacao, List<ImagemDocumentoValidator.ImagemValidada> imagens) {
+    public void anexar(SolicitacaoMatricula solicitacao, List<DocumentoValidado> imagens) {
         if (!TransactionSynchronizationManager.isSynchronizationActive()) throw new IllegalStateException("Uma transação é necessária para anexar documentos.");
         List<String> chaves=new ArrayList<>();
         TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
@@ -50,7 +49,7 @@ public class DocumentoService {
     @Transactional(readOnly=true)
     public ImagemDocumento obter(Long solicitacaoId, Long documentoId) {
         var documento=repository.findByIdAndSolicitacaoId(documentoId,solicitacaoId)
-            .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND,"Documento não encontrado"));
+            .orElseThrow(() -> new RecursoNaoEncontradoException("Documento não encontrado"));
         String extensao=documento.getContentType().equals("image/png") ? "png" : "jpg";
         return new ImagemDocumento(storage.ler(documento.getChaveBlob()),documento.getContentType(),documento.getTipo().name().toLowerCase(Locale.ROOT)+"."+extensao);
     }

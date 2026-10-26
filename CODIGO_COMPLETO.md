@@ -104,6 +104,30 @@ target
 CODIGO_COMPLETO.md
 ```
 
+## `src/main/java/com/escola/screi/config/AzureBlobConfig.java`
+
+```java
+package com.escola.screi.config;
+
+import com.azure.storage.blob.*;
+import com.azure.storage.common.policy.RequestRetryOptions;
+import com.azure.storage.common.policy.RetryPolicyType;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.annotation.*;
+
+@Configuration
+public class AzureBlobConfig {
+    @Bean public BlobContainerClient blobContainerClient(
+            @Value("${screi.storage.connection-string}") String connectionString,
+            @Value("${screi.storage.container}") String nomeContainer) {
+        return new BlobServiceClientBuilder().connectionString(connectionString)
+            .serviceVersion(BlobServiceVersion.V2023_11_03)
+            .retryOptions(new RequestRetryOptions(RetryPolicyType.FIXED, 2, 10, 100L, 500L, null))
+            .buildClient().getBlobContainerClient(nomeContainer);
+    }
+}
+```
+
 ## `src/main/java/com/escola/screi/config/DataInitializer.java`
 
 ```java
@@ -199,6 +223,22 @@ public class DocumentoController {
         return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).cacheControl(CacheControl.noStore())
             .body("A imagem está temporariamente indisponível. Tente novamente.");
     }
+}
+```
+
+## `src/main/java/com/escola/screi/controller/RecursoExceptionHandler.java`
+
+```java
+package com.escola.screi.controller;
+
+import com.escola.screi.service.RecursoNaoEncontradoException;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.*;
+
+@ControllerAdvice
+public class RecursoExceptionHandler {
+    @ExceptionHandler(RecursoNaoEncontradoException.class)
+    public ResponseEntity<Void> naoEncontrado() { return ResponseEntity.notFound().build(); }
 }
 ```
 
@@ -317,6 +357,17 @@ public class UploadExceptionHandler {
         return "redirect:/responsavel/novo";
     }
 }
+```
+
+## `src/main/java/com/escola/screi/dto/DocumentoValidado.java`
+
+```java
+package com.escola.screi.dto;
+
+import com.escola.screi.model.enums.TipoDocumento;
+
+/** Resultado de validação independente da implementação do validador. */
+public record DocumentoValidado(TipoDocumento tipo, byte[] dados, String contentType, String extensao) {}
 ```
 
 ## `src/main/java/com/escola/screi/dto/SolicitacaoMatriculaFormDto.java`
@@ -743,6 +794,41 @@ public interface DocumentoMatriculaRepository extends JpaRepository<DocumentoMat
 }
 ```
 
+## `src/main/java/com/escola/screi/repository/JpaRegistroSolicitacao.java`
+
+```java
+package com.escola.screi.repository;
+
+import com.escola.screi.model.SolicitacaoMatricula;
+import com.escola.screi.service.*;
+import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.stereotype.Component;
+import java.util.Locale;
+
+/** Adapta os detalhes de persistência à operação esperada pela aplicação. */
+// O repositório Spring Data já traduz falhas JPA; preservar aqui a exceção de negócio.
+@Component
+public class JpaRegistroSolicitacao implements RegistroSolicitacao {
+    private final SolicitacaoMatriculaRepository repository;
+    public JpaRegistroSolicitacao(SolicitacaoMatriculaRepository repository) { this.repository=repository; }
+    @Override public SolicitacaoMatricula salvar(SolicitacaoMatricula solicitacao) {
+        try {
+            return repository.saveAndFlush(solicitacao);
+        } catch (DataIntegrityViolationException ex) {
+            // A restrição também protege contra envios concorrentes do mesmo CPF.
+            for (Throwable causa=ex; causa!=null; causa=causa.getCause()) {
+                if (causa instanceof org.hibernate.exception.ConstraintViolationException violacao &&
+                    violacao.getConstraintName()!=null &&
+                    violacao.getConstraintName().toLowerCase(Locale.ROOT).contains("uk_aluno_cpf")) {
+                    throw new AlunoJaCadastradoException();
+                }
+            }
+            throw ex;
+        }
+    }
+}
+```
+
 ## `src/main/java/com/escola/screi/repository/SolicitacaoMatriculaRepository.java`
 
 ```java
@@ -819,21 +905,12 @@ import com.azure.core.util.BinaryData;
 import com.azure.storage.blob.*;
 import com.azure.storage.blob.models.BlobHttpHeaders;
 import com.azure.storage.blob.options.BlobParallelUploadOptions;
-import com.azure.storage.common.policy.RequestRetryOptions;
-import com.azure.storage.common.policy.RetryPolicyType;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 @Service
 public class AzureBlobDocumentoStorage implements DocumentoStorage {
     private final BlobContainerClient container;
-    public AzureBlobDocumentoStorage(@Value("${screi.storage.connection-string}") String connectionString,
-                                     @Value("${screi.storage.container}") String nomeContainer) {
-        container=new BlobServiceClientBuilder().connectionString(connectionString)
-            .serviceVersion(BlobServiceVersion.V2023_11_03)
-            .retryOptions(new RequestRetryOptions(RetryPolicyType.FIXED, 2, 10, 100L, 500L, null))
-            .buildClient().getBlobContainerClient(nomeContainer);
-    }
+    public AzureBlobDocumentoStorage(BlobContainerClient container) { this.container=container; }
     @Override public void enviar(String chave, byte[] imagem, String contentType) {
         try {
             // Without a public-access option the new container is private.
@@ -890,29 +967,28 @@ public class DocumentoInvalidoException extends IllegalArgumentException {
 package com.escola.screi.service;
 
 import com.escola.screi.dto.SolicitacaoMatriculaFormDto;
+import com.escola.screi.dto.DocumentoValidado;
 import com.escola.screi.model.*;
 import com.escola.screi.model.enums.TipoDocumento;
 import com.escola.screi.repository.DocumentoMatriculaRepository;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.*;
-import org.springframework.web.server.ResponseStatusException;
-import org.springframework.http.HttpStatus;
 import org.slf4j.LoggerFactory;
 import java.util.*;
 
 @Service
 public class DocumentoService {
     private final DocumentoStorage storage;
-    private final ImagemDocumentoValidator validator;
+    private final ValidadorDocumento validator;
     private final DocumentoMatriculaRepository repository;
-    public DocumentoService(DocumentoStorage storage, ImagemDocumentoValidator validator, DocumentoMatriculaRepository repository) {
+    public DocumentoService(DocumentoStorage storage, ValidadorDocumento validator, DocumentoMatriculaRepository repository) {
         this.storage=storage; this.validator=validator; this.repository=repository;
     }
-    public List<ImagemDocumentoValidator.ImagemValidada> validar(SolicitacaoMatriculaFormDto form) {
+    public List<DocumentoValidado> validar(SolicitacaoMatriculaFormDto form) {
         return Arrays.stream(TipoDocumento.values()).map(tipo -> validator.validar(tipo,form.arquivo(tipo))).toList();
     }
-    public void anexar(SolicitacaoMatricula solicitacao, List<ImagemDocumentoValidator.ImagemValidada> imagens) {
+    public void anexar(SolicitacaoMatricula solicitacao, List<DocumentoValidado> imagens) {
         if (!TransactionSynchronizationManager.isSynchronizationActive()) throw new IllegalStateException("Uma transação é necessária para anexar documentos.");
         List<String> chaves=new ArrayList<>();
         TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
@@ -939,7 +1015,7 @@ public class DocumentoService {
     @Transactional(readOnly=true)
     public ImagemDocumento obter(Long solicitacaoId, Long documentoId) {
         var documento=repository.findByIdAndSolicitacaoId(documentoId,solicitacaoId)
-            .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND,"Documento não encontrado"));
+            .orElseThrow(() -> new RecursoNaoEncontradoException("Documento não encontrado"));
         String extensao=documento.getContentType().equals("image/png") ? "png" : "jpg";
         return new ImagemDocumento(storage.ler(documento.getChaveBlob()),documento.getContentType(),documento.getTipo().name().toLowerCase(Locale.ROOT)+"."+extensao);
     }
@@ -952,6 +1028,12 @@ public class DocumentoService {
 ```java
 package com.escola.screi.service;
 
+/**
+ * Armazenamento binário independente de provedor.
+ * As operações são síncronas; falhas são sinalizadas por RuntimeException.
+ * enviar preserva os bytes recebidos; leituras não expõem memória mutável do armazenamento.
+ * excluir é idempotente: uma chave já ausente não constitui erro.
+ */
 public interface DocumentoStorage {
     void enviar(String chave, byte[] imagem, String contentType);
     byte[] ler(String chave);
@@ -1015,6 +1097,7 @@ public class ExcelExportService {
 package com.escola.screi.service;
 
 import com.escola.screi.model.enums.TipoDocumento;
+import com.escola.screi.dto.DocumentoValidado;
 import org.springframework.stereotype.Component;
 import org.springframework.web.multipart.MultipartFile;
 import javax.imageio.ImageIO;
@@ -1022,10 +1105,10 @@ import java.io.*;
 import java.util.Locale;
 
 @Component
-public class ImagemDocumentoValidator {
+public class ImagemDocumentoValidator implements ValidadorDocumento {
     public static final int MAX_BYTES=5*1024*1024;
     private static final long MAX_PIXELS=16_000_000;
-    public ImagemValidada validar(TipoDocumento tipo, MultipartFile arquivo) {
+    @Override public DocumentoValidado validar(TipoDocumento tipo, MultipartFile arquivo) {
         if (arquivo==null || arquivo.isEmpty()) throw erro(tipo,"Adicione a imagem deste documento.");
         if (arquivo.getSize()>MAX_BYTES) throw erro(tipo,"A imagem deve ter no máximo 5 MiB.");
         String nome=arquivo.getOriginalFilename()==null ? "" : arquivo.getOriginalFilename().toLowerCase(Locale.ROOT);
@@ -1050,7 +1133,7 @@ public class ImagemDocumentoValidator {
                     // Re-encode actual pixels; discard source metadata and appended content.
                     if (imagem==null || !ImageIO.write(imagem,formato,output)) throw erro(tipo,"Não foi possível processar a imagem.");
                     if (output.size()>MAX_BYTES) throw erro(tipo,"A imagem processada excede 5 MiB. Reduza a resolução.");
-                    return new ImagemValidada(tipo,output.toByteArray(),"image/"+formato,formato.equals("jpeg") ? "jpg" : "png");
+                    return new DocumentoValidado(tipo,output.toByteArray(),"image/"+formato,formato.equals("jpeg") ? "jpg" : "png");
                 } finally { reader.dispose(); }
             }
         } catch (IOException ex) { throw erro(tipo,"Não foi possível ler a imagem. Selecione um arquivo JPEG ou PNG válido."); }
@@ -1058,7 +1141,30 @@ public class ImagemDocumentoValidator {
     private DocumentoInvalidoException erro(TipoDocumento tipo, String mensagem) {
         return new DocumentoInvalidoException(tipo.getCampo(),mensagem);
     }
-    public record ImagemValidada(TipoDocumento tipo, byte[] dados, String contentType, String extensao) {}
+}
+```
+
+## `src/main/java/com/escola/screi/service/RecursoNaoEncontradoException.java`
+
+```java
+package com.escola.screi.service;
+
+/** Ausência de recurso; a camada web decide como representar esse resultado em HTTP. */
+public class RecursoNaoEncontradoException extends RuntimeException {
+    public RecursoNaoEncontradoException(String mensagem) { super(mensagem); }
+}
+```
+
+## `src/main/java/com/escola/screi/service/RegistroSolicitacao.java`
+
+```java
+package com.escola.screi.service;
+
+import com.escola.screi.model.SolicitacaoMatricula;
+
+/** Persiste a solicitação e sinaliza CPF duplicado com a exceção de negócio. */
+public interface RegistroSolicitacao {
+    SolicitacaoMatricula salvar(SolicitacaoMatricula solicitacao);
 }
 ```
 
@@ -1072,21 +1178,20 @@ import com.escola.screi.model.*;
 import com.escola.screi.model.enums.StatusMatricula;
 import com.escola.screi.repository.SolicitacaoMatriculaRepository;
 import com.escola.screi.repository.AlunoRepository;
-import org.springframework.dao.DataIntegrityViolationException;
 import jakarta.validation.Valid;
 import org.springframework.stereotype.Service;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.web.server.ResponseStatusException;
-import org.springframework.http.HttpStatus;
 import java.util.List;
 @Service @Validated
 public class SolicitacaoService {
     private final SolicitacaoMatriculaRepository repository;
     private final AlunoRepository alunos;
     private final DocumentoService documentos;
-    public SolicitacaoService(SolicitacaoMatriculaRepository repository, AlunoRepository alunos, DocumentoService documentos) {
-        this.repository=repository; this.alunos=alunos; this.documentos=documentos;
+    private final RegistroSolicitacao registro;
+    public SolicitacaoService(SolicitacaoMatriculaRepository repository, AlunoRepository alunos, DocumentoService documentos,
+                             RegistroSolicitacao registro) {
+        this.repository=repository; this.alunos=alunos; this.documentos=documentos; this.registro=registro;
     }
     @Transactional
     public SolicitacaoMatricula enviar(@Valid SolicitacaoMatriculaFormDto form) {
@@ -1101,19 +1206,7 @@ public class SolicitacaoService {
         s.setAluno(form.getAluno()); s.getResponsaveis().add(form.getResponsavel());
         s.getContatosEmergencia().add(form.getContatoEmergencia()); s.setStatus(StatusMatricula.ENVIADO);
         documentos.anexar(s,imagens);
-        try {
-            return repository.saveAndFlush(s);
-        } catch (DataIntegrityViolationException ex) {
-            // The unique constraint also protects simultaneous submissions.
-            for (Throwable causa=ex; causa!=null; causa=causa.getCause()) {
-                if (causa instanceof org.hibernate.exception.ConstraintViolationException violacao &&
-                    violacao.getConstraintName()!=null &&
-                    violacao.getConstraintName().toLowerCase(java.util.Locale.ROOT).contains("uk_aluno_cpf")) {
-                    throw new AlunoJaCadastradoException();
-                }
-            }
-            throw ex;
-        }
+        return registro.salvar(s);
     }
     @Transactional(readOnly=true)
     public List<SolicitacaoMatricula> consultar(String consulta) {
@@ -1132,7 +1225,7 @@ public class SolicitacaoService {
         var s=buscar(id); s.getResponsaveis().size(); s.getContatosEmergencia().size(); s.getDocumentos().size(); return s;
     }
     private SolicitacaoMatricula buscar(Long id) {
-        return repository.findById(id).orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND,"Solicitação não encontrada"));
+        return repository.findById(id).orElseThrow(() -> new RecursoNaoEncontradoException("Solicitação não encontrada"));
     }
     @Transactional
     public void atualizarStatus(Long id, StatusUpdateDto dto) {
@@ -1146,6 +1239,21 @@ public class SolicitacaoService {
         s.setJustificativaReprovacao(dto.getStatus()==StatusMatricula.COM_PENDENCIA ? dto.getJustificativaReprovacao().trim() : null);
         repository.saveAndFlush(s);
     }
+}
+```
+
+## `src/main/java/com/escola/screi/service/ValidadorDocumento.java`
+
+```java
+package com.escola.screi.service;
+
+import com.escola.screi.dto.DocumentoValidado;
+import com.escola.screi.model.enums.TipoDocumento;
+import org.springframework.web.multipart.MultipartFile;
+
+/** Valida e prepara os bytes; não realiza upload nem altera a solicitação. */
+public interface ValidadorDocumento {
+    DocumentoValidado validar(TipoDocumento tipo, MultipartFile arquivo);
 }
 ```
 
@@ -1460,7 +1568,7 @@ class AzuriteIntegrationTests {
         String nome="screi-test-"+java.util.UUID.randomUUID();
         var client=new BlobServiceClientBuilder().connectionString(connection)
             .serviceVersion(BlobServiceVersion.V2023_11_03).buildClient().getBlobContainerClient(nome);
-        var storage=new AzureBlobDocumentoStorage(connection,nome);
+        var storage=new AzureBlobDocumentoStorage(client);
         try {
             byte[] imagem=ImagensTeste.bytes("png");
             storage.enviar("cadastro/imagem.png",imagem,"image/png");
@@ -1469,6 +1577,7 @@ class AzuriteIntegrationTests {
             assertThat(client.getBlobClient("cadastro/imagem.png").getProperties().getContentType()).isEqualTo("image/png");
             storage.excluir("cadastro/imagem.png");
             assertThat(client.getBlobClient("cadastro/imagem.png").exists()).isFalse();
+            ContratoDocumentoStorage.verificar(storage);
         } finally { client.deleteIfExists(); }
     }
 
@@ -1500,6 +1609,65 @@ class AzuriteIntegrationTests {
                     .andExpect(status().isOk()).andExpect(content().bytes(ImagensTeste.bytes("png")));
             }
         } finally { repository.deleteAll(); client.deleteIfExists(); }
+    }
+}
+```
+
+## `src/test/java/com/escola/screi/ContratoDocumentoStorage.java`
+
+```java
+package com.escola.screi;
+
+import com.escola.screi.service.DocumentoStorage;
+import static org.assertj.core.api.Assertions.*;
+
+/** As mesmas verificações comportamentais são executadas para dois provedores. */
+final class ContratoDocumentoStorage {
+    private ContratoDocumentoStorage() {}
+    static void verificar(DocumentoStorage storage) {
+        String chave="contrato/"+java.util.UUID.randomUUID()+".png";
+        byte[] enviada=ImagensTeste.bytes("png");
+        byte[] esperada=enviada.clone();
+        try {
+            storage.enviar(chave,enviada,"image/png");
+            enviada[0]=0;
+            byte[] recebida=storage.ler(chave);
+            assertThat(recebida).isEqualTo(esperada);
+            recebida[0]=0;
+            assertThat(storage.ler(chave)).isEqualTo(esperada);
+            storage.excluir(chave);
+            assertThatNoException().isThrownBy(() -> storage.excluir(chave));
+        } finally { storage.excluir(chave); }
+    }
+}
+```
+
+## `src/test/java/com/escola/screi/DocumentoStorageContratoTests.java`
+
+```java
+package com.escola.screi;
+
+import com.escola.screi.service.DocumentoStorage;
+import org.junit.jupiter.api.Test;
+import java.util.HashMap;
+import java.util.Map;
+
+class DocumentoStorageContratoTests {
+    @Test void armazenamentoEmMemoriaPreservaOContratoDoProvedor() {
+        ContratoDocumentoStorage.verificar(new StorageEmMemoria());
+    }
+    private static class StorageEmMemoria implements DocumentoStorage {
+        private final Map<String, Objeto> objetos=new HashMap<>();
+        @Override public void enviar(String chave, byte[] imagem, String contentType) {
+            objetos.put(chave,new Objeto(imagem.clone(),contentType));
+        }
+        @Override public byte[] ler(String chave) {
+            var objeto=objetos.get(chave);
+            if (objeto==null) throw new IllegalArgumentException("Objeto não encontrado.");
+            return objeto.dados().clone();
+        }
+        @Override public void excluir(String chave) { objetos.remove(chave); }
+        private record Objeto(byte[] dados, String contentType) {}
     }
 }
 ```
@@ -1862,6 +2030,12 @@ class ScreiApplicationTests {
         mvc.perform(submissaoValida()).andExpect(status().isOk()).andExpect(view().name("wizard"))
             .andExpect(model().hasErrors()).andExpect(content().string(org.hamcrest.Matchers.containsString("temporariamente indisponível")));
         assertThat(repository.count()).isZero();
+    }
+
+    @Test void ausenciaDeRecursoEConvertidaParaHttpSomenteNaCamadaWeb() throws Exception {
+        assertThatThrownBy(() -> service.detalhar(-1L)).isInstanceOf(RecursoNaoEncontradoException.class);
+        mvc.perform(get("/secretaria/solicitacoes/-1").with(user("secretaria").roles("SECRETARIA")))
+            .andExpect(status().isNotFound());
     }
 }
 ```

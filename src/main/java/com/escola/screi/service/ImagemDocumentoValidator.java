@@ -1,6 +1,7 @@
 package com.escola.screi.service;
 
 import com.escola.screi.model.enums.TipoDocumento;
+import com.escola.screi.dto.DocumentoValidado;
 import org.springframework.stereotype.Component;
 import org.springframework.web.multipart.MultipartFile;
 import javax.imageio.ImageIO;
@@ -8,10 +9,10 @@ import java.io.*;
 import java.util.Locale;
 
 @Component
-public class ImagemDocumentoValidator {
+public class ImagemDocumentoValidator implements ValidadorDocumento {
     public static final int MAX_BYTES=5*1024*1024;
     private static final long MAX_PIXELS=16_000_000;
-    public ImagemValidada validar(TipoDocumento tipo, MultipartFile arquivo) {
+    @Override public DocumentoValidado validar(TipoDocumento tipo, MultipartFile arquivo) {
         if (arquivo==null || arquivo.isEmpty()) throw erro(tipo,"Adicione a imagem deste documento.");
         if (arquivo.getSize()>MAX_BYTES) throw erro(tipo,"A imagem deve ter no máximo 5 MiB.");
         String nome=arquivo.getOriginalFilename()==null ? "" : arquivo.getOriginalFilename().toLowerCase(Locale.ROOT);
@@ -36,7 +37,7 @@ public class ImagemDocumentoValidator {
                     // Re-encode actual pixels; discard source metadata and appended content.
                     if (imagem==null || !ImageIO.write(imagem,formato,output)) throw erro(tipo,"Não foi possível processar a imagem.");
                     if (output.size()>MAX_BYTES) throw erro(tipo,"A imagem processada excede 5 MiB. Reduza a resolução.");
-                    return new ImagemValidada(tipo,output.toByteArray(),"image/"+formato,formato.equals("jpeg") ? "jpg" : "png");
+                    return new DocumentoValidado(tipo,output.toByteArray(),"image/"+formato,formato.equals("jpeg") ? "jpg" : "png");
                 } finally { reader.dispose(); }
             }
         } catch (IOException ex) { throw erro(tipo,"Não foi possível ler a imagem. Selecione um arquivo JPEG ou PNG válido."); }
@@ -44,5 +45,4 @@ public class ImagemDocumentoValidator {
     private DocumentoInvalidoException erro(TipoDocumento tipo, String mensagem) {
         return new DocumentoInvalidoException(tipo.getCampo(),mensagem);
     }
-    public record ImagemValidada(TipoDocumento tipo, byte[] dados, String contentType, String extensao) {}
 }
