@@ -2,6 +2,8 @@
 
 Data da análise: 22/10/2026.
 
+**Atualização:** foi implementado posteriormente o fluxo local de testes com cinco etapas, quatro imagens JPEG/PNG obrigatórias, Azure Blob SDK e Azurite no Docker Compose. Consulte o [README](../README.md) para execução e limites efetivos. As seções abaixo registram a proposta original de produção, incluindo PDFs e medidas que não fazem parte da implementação local atual; a estimativa financeira não representa cobrança ou contratação.
+
 ## Entrega atual: unicidade pelo CPF do aluno
 
 A unicidade é exclusivamente do CPF do aluno. Pontuação é removida antes da consulta e da gravação: `529.982.247-25` e `52998224725` representam o mesmo aluno. O serviço verifica a existência antes de salvar e uma restrição única no banco impede que duas requisições simultâneas contornem essa verificação.
