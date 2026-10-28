@@ -11,6 +11,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.context.DynamicPropertyRegistry;
+import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
@@ -20,7 +21,9 @@ import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import static org.assertj.core.api.Assertions.*;
 
 @EnabledIfEnvironmentVariable(named="SCREI_TEST_AZURITE",matches="true")
-@SpringBootTest(properties="spring.datasource.url=jdbc:h2:mem:azurite-tests;DB_CLOSE_DELAY=-1")
+@SpringBootTest(properties={"spring.jpa.properties.hibernate.default_schema=azurite_tests",
+    "spring.jpa.properties.hibernate.hbm2ddl.create_namespaces=true"})
+@ActiveProfiles("test")
 @AutoConfigureMockMvc
 class AzuriteIntegrationTests {
     private static final String CONTAINER="screi-flow-test-"+java.util.UUID.randomUUID();
