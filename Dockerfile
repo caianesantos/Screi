@@ -7,7 +7,7 @@ RUN mvn -B -ntp -DskipTests package
 
 FROM eclipse-temurin:17-jre
 WORKDIR /app
-RUN groupadd --system screi && useradd --system --gid screi screi && mkdir /app/.data && chown screi:screi /app/.data
+RUN groupadd --system screi && useradd --system --gid screi screi
 COPY --from=build /build/target/screi-1.0.0.jar /app/screi.jar
 USER screi
 EXPOSE 8080
